@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="es-MX">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0c1420">
+  <meta name="description" content="Controla los tiempos de tus presentaciones, sin conexión y con una pantalla para el público.">
+  <link rel="manifest" href="./manifest.webmanifest"><link rel="icon" type="image/svg+xml" href="./icons/timer.svg">
+  <title>Panel de control · Temporizador de Presentaciones</title>
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand"><img src="./icons/timer.svg" width="42" height="42" alt=""><div><strong>Temporizador</strong><span>DE PRESENTACIONES</span></div></div>
+    <div class="header-actions"><span class="local-label"><i></i> Operación local</span><button id="install" class="button secondary" hidden>Instalar aplicación</button></div>
+  </header>
+  <main class="workspace">
+    <div class="page-heading"><div><p class="eyebrow">TU EVENTO, A TIEMPO</p><h1>Panel de control</h1><p class="subtitle">Prepara las actividades. Controla el tiempo. Mantén el ritmo.</p></div><span class="tag">CONTROL DEL OPERADOR</span></div>
+    <div id="message" class="notice" role="status" aria-live="polite" hidden></div>
+    <fieldset id="workspace-controls" disabled>
+      <div class="dashboard">
+        <section class="card activities-card" aria-labelledby="activities-heading">
+          <div class="card-header"><div><p class="section-number">01 / PROGRAMA</p><h2 id="activities-heading">Actividades <span id="activity-count" class="count">0</span></h2></div><button id="add" class="button secondary">＋ Agregar</button></div>
+          <p class="section-help">Selecciona una actividad para lanzarla a la pantalla.</p>
+          <div class="table-wrap"><table><thead><tr><th scope="col">Actividad</th><th scope="col">Duración</th><th scope="col" class="actions-heading">Acciones</th></tr></thead><tbody id="activities"></tbody></table></div>
+          <div id="empty" class="empty" hidden>No hay actividades. Agrega una o importa tu archivo CSV.</div>
+          <div class="table-footer"><span id="save-status">Cargando configuración…</span><div class="csv-actions"><button id="import" class="text-button">↑ Importar CSV</button><button id="export" class="text-button">↓ Exportar CSV</button><input id="csv-file" type="file" accept=".csv,text/csv" hidden></div></div>
+        </section>
+        <div class="right-column">
+          <section class="card timer-card" aria-labelledby="timer-heading">
+            <div class="card-header"><div><p class="section-number">02 / EN VIVO</p><h2 id="timer-heading">Temporizador activo</h2></div><span id="timer-state" class="state" role="status">Listo</span></div>
+            <div class="timer-preview"><p id="active-title">Sin actividad activa</p><div id="remaining" class="digits">00:00</div><p class="duration-note">Duración original <span id="original-duration">—</span></p></div>
+            <div class="timer-actions"><button id="launch" class="button primary">▶ Lanzar</button><button id="pause" class="button secondary" disabled>Pausar</button><button id="stop" class="button secondary" disabled>Detener</button><button id="reset" class="button secondary" disabled>Reiniciar</button></div>
+            <p id="selection-hint" class="selection-hint">Selecciona una actividad.</p>
+          </section>
+          <section class="card screen-card" aria-labelledby="screen-heading">
+            <div class="screen-icon" aria-hidden="true">▱</div><div class="screen-content"><p class="section-number">03 / VISUALIZACIÓN</p><h2 id="screen-heading">Pantalla externa</h2><p id="connection" class="connection">Sin ventana conectada</p><div class="screen-actions"><button id="show" class="button secondary">Mostrar ventana ↗</button><button id="hide" class="text-button">Ocultar ventana</button><button id="choose-screen" class="text-button screen-select" hidden>Seleccionar pantalla</button></div><label id="screen-label" hidden>Pantalla <select id="screen-choice"></select></label><p class="screen-tip">Arrastra la ventana al monitor externo y activa pantalla completa desde allí.</p></div>
+          </section>
+        </div>
+      </div>
+    </fieldset>
+    <footer class="workspace-footer"><div><span class="status-dot"></span><span id="offline-status">Preparando almacenamiento offline…</span><button id="verify-offline" class="text-button">Verificar</button></div><span>Sin cuentas. Sin nube. Todo en tu equipo.</span></footer>
+  </main>
+  <dialog id="activity-dialog" aria-labelledby="dialog-title">
+    <form id="activity-form"><p class="eyebrow">PROGRAMA DEL EVENTO</p><h2 id="dialog-title">Agregar actividad</h2><label for="activity-title">Título</label><input id="activity-title" name="title" required autocomplete="off" placeholder="Ej. Presentación de resultados"><label for="activity-duration">Duración (MM:SS)</label><input id="activity-duration" name="duration" required inputmode="text" placeholder="10:00" aria-describedby="duration-help"><p id="duration-help" class="field-help">Puedes usar más de 59 minutos. Ejemplo: 90:00.</p><p id="form-error" role="alert" class="form-error"></p><div class="dialog-actions"><button id="cancel-edit" type="button" class="button secondary">Cancelar</button><button id="save-activity" type="submit" class="button primary">Guardar actividad</button></div></form>
+  </dialog>
+  <script type="module" src="/src/ui/control-view.js"></script>
+</body>
+</html>

@@ -25,3 +25,14 @@ describe('Persistencia transaccional en IndexedDB', () => {
   it('informa los errores al abrir el almacenamiento', async () => { await expect(openDatabase({ factory: { open() { const request = {}; queueMicrotask(() => request.onerror()); return request; } } })).rejects.toThrow('almacenamiento local'); });
   it('propaga errores si el almacenamiento deja de estar disponible', async () => { db.close(); await expect(db.saveActivities([{ title: 'Nueva', durationMs: 1000 }])).rejects.toThrow(); });
 });
+
+describe('Reclamación de advertencias', () => {
+  it('dos ventanas sólo pueden reclamar una vez incluso tras reabrir', async () => {
+    const other = await openDatabase({ factory, name: 'pruebas' });
+    try {
+      expect(await Promise.all([db.claimWarning('sesion-a'), other.claimWarning('sesion-a')])).toEqual([true, false]);
+      expect(await other.claimWarning('sesion-b')).toBe(true);
+    } finally { other.close(); }
+    db.close(); db = await openDatabase({ factory, name: 'pruebas' }); expect(await db.claimWarning('sesion-a')).toBe(false);
+  });
+});

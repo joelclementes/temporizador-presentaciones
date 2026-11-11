@@ -47,6 +47,12 @@ export async function openDatabase({ factory = indexedDB, name = 'temporizador-p
     },
     loadSession: () => read('session'),
     saveSession: (session) => write('session', session),
+    // La reclamación se confirma ANTES de programar audio. Incluso otra ventana o una recarga no pueden repetirlo.
+    claimWarning: (id) => transaction('readwrite', (store, done) => {
+      const key = `warning-claim:${id}`;
+      const request = store.get(key);
+      request.onsuccess = () => { if (request.result) done(false); else { store.put(true, key); done(true); } };
+    }),
     nextEpoch: () => transaction('readwrite', (store, done) => {
       const request = store.get('epoch');
       request.onsuccess = () => { const epoch = (request.result || 0) + 1; store.put(epoch, 'epoch'); done(epoch); };

@@ -4,6 +4,8 @@ import { openDatabase } from '../storage/database.js';
 import { TimerChannel, SnapshotReceiver, HEARTBEAT_MS, scopeKey } from '../sync/timer-channel.js';
 import { fitText } from './fit-text.js';
 import { setupPWA } from './pwa.js';
+import { visibleTime } from '../core/timer-engine.js';
+import { WarningAudio, WarningDelivery } from '../audio/warning-audio.js';
 
 const title = document.getElementById('display-title');
 const time = document.getElementById('display-time');
@@ -15,6 +17,19 @@ let controllerClosed = false;
 let liveReceived = false;
 let fittedTitle = '', fittedTime = '';
 let fitPending = false;
+const audio = new WarningAudio({ changed: () => { renderAudio(); requestState(); } });
+const database = openDatabase({ name: `temporizador-v1:${scopeKey()}` });
+const delivery = new WarningDelivery({ audio, claim: async (id) => (await database).claimWarning(id), current: () => ({ snapshot: receiver.snapshot, epoch: receiver.epoch, remainingMs: receiver.remaining() }) });
+function renderAudio() {
+  document.getElementById('audio-status').textContent = audio.ready ? 'Sonido habilitado · verifica volumen' : audio.status === 'unavailable' ? 'Sonido no disponible' : 'Sonido pendiente de habilitar';
+}
+document.getElementById('test-sound').addEventListener('click', async (event) => {
+  event.currentTarget.disabled = true;
+  const played = await audio.test();
+  renderAudio(); requestState();
+  if (!played) document.getElementById('audio-status').textContent = 'Prueba sin confirmar · vuelve a habilitar';
+  document.getElementById('test-sound').disabled = false;
+});
 function fit() {
   fitPending = false;
   fitText(title, document.getElementById('title-area'), { max: 170 });
@@ -23,14 +38,17 @@ function fit() {
 }
 function requestFit() { if (!fitPending) { fitPending = true; requestAnimationFrame(fit); } }
 const channel = new TimerChannel((message) => {
-  if (message.type === 'SNAPSHOT' && receiver.accept(message)) { liveReceived = true; controllerClosed = false; render(); }
-  if (message.type === 'CONTROLLER_CLOSED') { controllerClosed = true; render(); }
+  if (message.type === 'SNAPSHOT' && receiver.accept(message)) { liveReceived = true; controllerClosed = false; delivery.sync(); render(); }
+  if (message.type === 'CONTROLLER_CLOSED') { controllerClosed = true; audio.cancel(); render(); }
+  if (message.type === 'AUDIO_WARNING' && message.viewerId === viewerId && !controllerClosed && !receiver.isStale()) {
+    void delivery.deliver(message).then((status) => { if (status) channel.send('AUDIO_RESULT', { epoch: message.epoch, viewerId, id: message.id, status }); });
+  }
   if (message.type === 'HIDE_DISPLAY') window.close();
 });
 function render() {
   const snapshot = receiver.snapshot;
   const nextTitle = snapshot?.title || 'Temporizador de Presentaciones';
-  const nextTime = formatDuration(receiver.remaining());
+  const nextTime = formatDuration(visibleTime(snapshot, receiver.remaining()));
   if (title.textContent !== nextTitle) title.textContent = nextTitle;
   if (time.textContent !== nextTime) time.textContent = nextTime;
   time.classList.toggle('finished', snapshot?.state === 'Finalizado' || (snapshot?.state === 'Ejecutando' && receiver.remaining() === 0));
@@ -38,8 +56,8 @@ function render() {
   else warning.textContent = snapshot?.state === 'Pausado' ? 'En pausa' : snapshot?.state === 'Detenido' ? 'Detenido' : '';
   if (fittedTitle !== nextTitle || fittedTime.length !== nextTime.length) { fittedTitle = nextTitle; fittedTime = nextTime; requestFit(); }
 }
-const requestState = () => channel.send('REQUEST_STATE', { viewerId });
-const heartbeat = setInterval(() => { channel.send('VIEWER_ALIVE', { viewerId }); requestState(); }, HEARTBEAT_MS);
+const requestState = () => channel.send('REQUEST_STATE', { viewerId, audioReady: audio.ready });
+const heartbeat = setInterval(() => { channel.send('VIEWER_ALIVE', { viewerId, audioReady: audio.ready }); requestState(); }, HEARTBEAT_MS);
 new ResizeObserver(requestFit).observe(document.getElementById('display-stage'));
 window.addEventListener('focus', requestState);
 window.addEventListener('pageshow', requestState);
@@ -53,13 +71,13 @@ fullscreen.addEventListener('click', async () => {
 });
 document.addEventListener('fullscreenchange', () => { fullscreen.setAttribute('aria-label', document.fullscreenElement ? 'Salir de pantalla completa' : 'Pantalla completa'); requestFit(); });
 // La sesión persistida sólo es una referencia detenida hasta recibir confirmación del panel.
-openDatabase({ name: `temporizador-v1:${scopeKey()}` }).then(async (db) => {
-  const saved = await db.loadSession(); db.close();
+database.then(async (db) => {
+  const saved = await db.loadSession();
   if (!liveReceived && saved) { receiver.snapshot = { ...saved, state: 'Detenido' }; render(); }
 }).catch(() => { if (!liveReceived) warning.textContent = 'Abre el panel para recuperar el estado del temporizador.'; });
 setupPWA({});
 requestState();
 function animate() { render(); requestAnimationFrame(animate); }
 animate(); requestFit();
-window.addEventListener('pagehide', () => { clearInterval(heartbeat); channel.send('VIEWER_CLOSED', { viewerId }); channel.close(); });
+window.addEventListener('pagehide', () => { audio.cancel(); void database.then((db) => db.close(), () => {}); clearInterval(heartbeat); channel.send('VIEWER_CLOSED', { viewerId }); channel.close(); });
 window.addEventListener('pageshow', (event) => { if (event.persisted) location.reload(); });

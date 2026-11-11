@@ -39,8 +39,9 @@ public/
   manifest.webmanifest      Identidad, alcance e instalación
   icons/                    Iconos PNG 192/512, maskable y SVG
 src/
-  core/                     Validación, formato y máquina de estados del reloj
-  storage/                  IndexedDB y analizador CSV estricto
+  core/                     Validación, modalidades y máquina de estados del reloj
+  audio/                    Web Audio y entrega idempotente de advertencias
+  storage/                  IndexedDB, preferencia local y analizador CSV estricto
   sync/                     Canal, versiones y proyección de instantáneas
   screens/                  Apertura y selección opcional de monitor
   ui/                       Interfaces, ajuste de texto y registro PWA
@@ -53,7 +54,8 @@ tests/
   unit/                     Vitest y fake-indexeddb
   e2e/                      Playwright sobre la compilación de producción
 docs/
-  VALIDACION.md             Evidencia y límites de las comprobaciones
+  VALIDACION.md             Validación inicial
+  VALIDACION-MODALIDADES-AUDIO.md  Validación de modalidades y audio
 vite.config.js              Entradas HTML y generación de precache
 playwright.config.js        Servidor y navegador de las pruebas
 ```
@@ -62,29 +64,29 @@ Las herramientas de desarrollo principales son Vite, Vitest, Playwright y fake-i
 
 ### Reloj y estados
 
-El panel es la única autoridad. El motor recibe un reloj inyectable (`performance.now()` en producción) y calcula el tiempo restante a partir de una referencia monotónica. Los intervalos y la animación actualizan la vista, sin restar segundos al estado.
+El panel es la única autoridad. El motor recibe un reloj inyectable (`performance.now()` en producción) y calcula el tiempo restante a partir de una referencia monotónica. El cronómetro obtiene el tiempo transcurrido restándolo de la duración original, sin un segundo motor ni incrementos acumulativos. Los intervalos y la animación actualizan la vista, sin restar segundos al estado.
 
 | Estado | Acciones válidas |
 | --- | --- |
 | Listo | Lanzar, Reiniciar |
-| Ejecutando | Pausar, Detener, Reiniciar, Finalizar al llegar a cero |
+| Ejecutando | Pausar, Detener, Reiniciar, Finalizar al alcanzar el límite |
 | Pausado | Continuar, Detener, Reiniciar; Lanzar otra actividad con confirmación |
-| Detenido | Lanzar desde la duración original, Reiniciar |
-| Finalizado | Lanzar desde la duración original, Reiniciar |
+| Detenido | Lanzar desde el inicio de la modalidad, Reiniciar |
+| Finalizado | Lanzar desde el inicio de la modalidad, Reiniciar |
 
-Lanzar la misma actividad en ejecución o pausa reutiliza su sesión y no la reinicia. Para reanudar una pausa se pulsa **Continuar**. Para sustituir otra sesión en ejecución o pausa se pide confirmación. Reiniciar devuelve el tiempo original y deja el estado Listo, sin avanzar. Finalizar muestra cero y color rojo; no hay sonido.
+Lanzar la misma actividad en ejecución o pausa reutiliza su sesión y no la reinicia. Para reanudar una pausa se pulsa **Continuar**. Para sustituir otra sesión en ejecución o pausa se pide confirmación. Reiniciar devuelve el tiempo a `00:00` en ascendente o a la duración original en descendente y deja el estado Listo, sin avanzar. Finalizar conserva el límite en ascendente o cero en descendente, con números rojos. No se reproduce ningún sonido adicional al finalizar.
 
 Cada sesión mantiene una copia del título y la duración originales. Editar o eliminar la actividad no altera esa copia. Volver a lanzar esa misma sesión después de detenerla, reiniciarla o finalizarla conserva su duración original. Para cargar una configuración editada como nueva sesión, lanza otra actividad y después la editada.
 
 ### Sincronización y recuperación
 
-Cada autoridad tiene una generación creciente asignada en una transacción IndexedDB. Cada instantánea lleva generación, secuencia creciente, identificador de sesión, versión del motor, estado, duración, tiempo restante y fecha de envío. La pantalla rechaza generaciones y secuencias antiguas. No ejecuta otro motor: proyecta la última instantánea con su propio reloj monotónico; nunca utiliza el `performance.now()` crudo de otra ventana.
+Cada autoridad tiene una generación creciente asignada en una transacción IndexedDB. Cada instantánea lleva generación, secuencia creciente, identificador de sesión, versión del motor, modalidad, estado, duración, tiempo restante y transcurrido, estado e identificador de advertencia y fecha de envío. La pantalla rechaza generaciones y secuencias antiguas. No ejecuta otro motor: proyecta la última instantánea con su propio reloj monotónico; nunca utiliza el `performance.now()` crudo de otra ventana.
 
 Una fecha de envío compatible (`Date.now()`) compensa el tránsito, acotado a ocho segundos. Instantáneas al cambiar el estado, latidos cada dos segundos y solicitudes al abrir, recargar, recuperar foco o visibilidad corrigen la vista. Un cambio del reloj del sistema puede afectar brevemente la compensación del tránsito, pero no la cuenta autoritativa del panel.
 
 Tras ocho segundos sin confirmación, la pantalla muestra **Sin comunicación con el panel · estado sin verificar** y limita la extrapolación al último período de ocho segundos. Un cierre comunicado por el panel muestra la advertencia inmediatamente. El título y tiempo permanecen visibles; la recuperación de comunicación sustituye la referencia por el estado vigente.
 
-La configuración y la última sesión se guardan en IndexedDB. La sesión se guarda en cada acción y aproximadamente cada dos segundos, así que un cierre abrupto puede dejar una referencia algo anterior. Recargar o volver a abrir el panel recupera esa referencia en **Detenido**. Nunca se reanuda por sí sola. La pantalla pública puede recuperar la referencia guardada, pero no la presenta como confirmada hasta recibir al controlador.
+La configuración y la última sesión se guardan en IndexedDB. La preferencia global de modalidad se guarda de forma síncrona en localStorage, separada por ruta; no se exporta al CSV. Cada sesión conserva su propia modalidad aunque cambie la preferencia. Los datos anteriores sin modalidad se interpretan como `countdown`; no se borran ni se migra la estructura de IndexedDB. La sesión se guarda en cada acción y aproximadamente cada dos segundos, así que un cierre abrupto puede dejar una referencia algo anterior. Recargar o volver a abrir el panel recupera esa referencia en **Detenido**. Nunca se reanuda por sí sola. La pantalla pública puede recuperar la referencia guardada, pero no la presenta como confirmada hasta recibir al controlador.
 
 Un segundo panel queda deshabilitado y explica cómo recuperar el control. Cierra el primer panel y recarga el segundo. La ruta de instalación separa canales, bloqueos, datos y cachés cuando hay varias copias bajo un origen.
 
@@ -114,7 +116,7 @@ Conserva respaldos fuera del navegador. IndexedDB no sustituye a un respaldo: bo
 
 ### Temporizador y ventana pública
 
-1. Selecciona una actividad y pulsa **Lanzar**. El temporizador comienza y se abre o recupera una ventana con nombre estable.
+1. Selecciona una actividad, elige la modalidad en **02 / EN VIVO** y pulsa **Lanzar**. El temporizador comienza y se abre o recupera una ventana con nombre estable.
 2. **Pausar / Continuar**, **Detener** y **Reiniciar** actúan sobre la sesión activa, aunque selecciones otra fila.
 3. **Mostrar ventana** permite recuperarla sin tocar el reloj. Si está bloqueada, permite ventanas emergentes para este sitio y vuelve a pulsarlo.
 4. **Ocultar ventana** cierra la pantalla pública y mantiene la cuenta en el panel. Se puede volver a abrir.
@@ -122,6 +124,26 @@ Conserva respaldos fuera del navegador. IndexedDB no sustituye a un respaldo: bo
 6. La selección de pantalla aparece sólo si `getScreenDetails()` está disponible. Pulsa **Seleccionar pantalla**, concede el permiso si quieres y elige el monitor. El navegador puede limitar mover/redimensionar ventanas: el traslado manual sigue disponible.
 
 La pantalla usa fondo oscuro, título centrado y números blancos tabulares; se vuelven rojos al finalizar. `ResizeObserver` y una búsqueda binaria sobre medidas reales ajustan título y tiempo al espacio. Los minutos superiores a 59 permanecen en formato de minutos (`120:00`), sin cambiar a horas.
+
+### Modalidades de conteo
+
+La opción predeterminada es **Contador descendente (temporizador)**: la duración configurada es el punto de partida, y la cuenta termina en `00:00`. En **Contador ascendente (cronómetro)**, esa misma duración es el tiempo límite: comienza en `00:00`, muestra segundos completos transcurridos y termina exactamente en el límite sin superarlo. Para una actividad de `10:00`, finaliza en `10:00` y muestra **Tiempo límite: 10:00** en el panel.
+
+Ambas modalidades admiten más de 59 minutos y conservan pausa, continuación, detención y reinicio. La pausa no consume tiempo y detener conserva el valor mostrado. La preferencia de los radios se aplica al siguiente lanzamiento y se recupera al reabrir. Cambiarla durante una ejecución no altera esa sesión; el texto de duración corresponde siempre a la sesión activa. La ventana pública recibe la modalidad y no incluye controles de administración.
+
+### Advertencia de un minuto y sonido
+
+Para actividades de más de un minuto, una advertencia breve de **dos tonos** se solicita una sola vez al cruzar los 60 segundos restantes: en `09:00` del cronómetro de diez minutos o en `01:00` de su cuenta atrás. La detección utiliza milisegundos autoritativos y reconoce saltos como 61,2 → 58,7 segundos. Si el navegador vuelve después del vencimiento, el aviso se omite. Para duraciones de **exactamente `01:00`**, se solicita al lanzar; para duraciones **inferiores a un minuto**, no hay aviso. No hay sonido de finalización.
+
+Antes del evento pulsa **Probar sonido** en el panel, escucha ambos tonos y ajusta el volumen y la salida del equipo. Para preferir la ventana pública, ábrela antes de lanzar y pulsa allí **Habilitar / probar sonido**. Se usa Web Audio local (740 y 880 Hz, nivel de ganancia 0,12, señal de 580 ms); no hay archivos ni servicios de audio externos. La prueba no modifica la sesión ni consume una advertencia real.
+
+El indicador comienza en **Sonido pendiente de habilitar**. El contexto sólo se considera habilitado si se comprueba su estado `running` después de una interacción. Si la API falta, el permiso falla o la prueba no termina, la interfaz lo informa y ofrece volver a probar. Chrome aplica restricciones de reproducción automática a Web Audio y puede exigir crear o reanudar el contexto desde una interacción ([política oficial de Chrome](https://developer.chrome.com/blog/autoplay)). Abrir una ventana o enviar un mensaje no habilita por sí solo su sonido. Las ventanas recargadas necesitan habilitación de nuevo; el indicador refleja sus latidos recientes.
+
+El panel asigna **un solo destinatario**: una ventana pública que haya anunciado audio habilitado recientemente o, si ninguna está disponible, el propio panel. Persiste primero la solicitud, envía un permiso dirigido con generación, sesión e identificador y vencimiento de 2,5 segundos, y el destinatario reclama ese identificador mediante una transacción IndexedDB **antes** de programar los tonos. Sólo una reclamación puede prosperar, incluso con varias ventanas o tras una recarga. Las instantáneas nunca ordenan reproducir audio.
+
+Estados de advertencia: `pending` (pendiente), `requested` (solicitada), `played` (señal terminada con contexto activo), `unavailable` (sin confirmación o restringida) y `skipped` (no aplicable o vencida). El panel espera confirmación por hasta 4,5 segundos. Un permiso incierto o fallido no se reasigna ni se reintenta: se prioriza impedir duplicados. Pausar o detener cancela un aviso solicitado todavía sin confirmar; continuar no lo repite. Si todavía estaba pendiente antes de pausar, se conserva hasta cruzar el umbral después de continuar. Reiniciar deja Listo y el siguiente lanzamiento crea otra sesión con un nuevo aviso.
+
+Cerrar/reabrir la pantalla, recargarla, recuperar foco o recibir mensajes repetidos no emite advertencias anteriores. Recuperar el panel mantiene la sesión detenida y convierte solicitudes inciertas en no disponibles. Estos estados y las reclamaciones persisten offline. El navegador no permite demostrar que los altavoces estén conectados o sean audibles: **habilitado** verifica el contexto y **emitida** verifica que terminó la señal, sin comprobar la salida física. No se garantiza precisión acústica absoluta bajo suspensión del sistema o congelación del navegador. Escucha una prueba en el equipo y monitor HDMI del evento.
 
 ## Instalación como PWA en Windows
 
@@ -135,17 +157,17 @@ El manifiesto utiliza `display: standalone`, alcance relativo y ambas ventanas b
 
 ## Preparación offline y antes de un evento
 
-1. Abre la aplicación con conexión y pulsa **Verificar** en el pie. Espera **Preparada para usar sin conexión**. La comprobación consulta al Service Worker y verifica todos los recursos reales del precache, incluida `display.html`.
+1. Abre la aplicación con conexión y pulsa **Verificar** en el pie. Espera **Preparada para usar sin conexión**. La comprobación consulta al Service Worker y verifica todos los recursos reales del precache, incluida `display.html` y los módulos de audio.
 2. Configura o importa las actividades; exporta un respaldo CSV.
 3. Conecta HDMI. En Windows pulsa **Windows + P → Extender**. En Configuración → Sistema → Pantalla, identifica y ordena las pantallas; ajusta resolución y escala.
 4. Pulsa **Mostrar ventana**, trasládala al monitor externo (arrastrándola o con **Windows + Mayús + Flecha izquierda/derecha**) y pulsa **⛶** desde esa ventana.
-5. Lanza una actividad corta. Comprueba título, pausa, continuación, detención, reinicio y finalización roja en ambas pantallas.
+5. Habilita y prueba el sonido donde deba salir; revisa volumen y salida HDMI/altavoces. Lanza una actividad de `01:00` en cada modalidad para comprobar el aviso inicial único y otra inferior a un minuto para comprobar el final silencioso. Comprueba título, pausa, continuación, detención, reinicio y finalización roja en ambas pantallas.
 6. Cierra y vuelve a abrir únicamente la pantalla pública durante una cuenta para comprobar que conserva el tiempo vigente.
 7. Cierra **ambas ventanas** y cualquier pestaña del mismo sitio. Desconecta la red y abre de nuevo la PWA instalada. Verifica que se conserva la configuración y abre la pantalla pública. Prueba exportación e importación CSV sin red. Este cierre y reapertura es parte de la verificación offline.
 8. Si hubo una sesión previa, debe aparecer detenida. Lanza explícitamente la actividad que corresponda.
 9. Antes del evento, conecta alimentación, desactiva temporalmente la suspensión y verifica que las pantallas no se apagarán durante la actividad.
 
-Los recursos se precargan durante la instalación del Service Worker: panel, pantalla, módulos, CSS, manifiesto e iconos. Las fuentes provienen del sistema. No se necesita que la página pública se haya visitado para que quede en caché. Sin embargo, comprobarla manualmente permite confirmar los permisos de ventanas.
+Los recursos se precargan durante la instalación del Service Worker: panel, pantalla, módulos, CSS, manifiesto e iconos. Las fuentes provienen del sistema y Web Audio genera la señal sin red. La modalidad guardada también se recupera offline. No se necesita que la página pública se haya visitado para que quede en caché. Sin embargo, comprobarla manualmente permite confirmar los permisos de ventanas.
 
 Una actualización descarga una caché nueva y espera hasta que todas las ventanas de la versión anterior se cierren. La aplicación no usa `skipWaiting`, no fuerza recargas y avisa de la actualización pendiente. Termina la actividad antes de cerrar para actualizar. La caché antigua se retira al activar la siguiente versión. El navegador puede eliminar datos por decisión del usuario o por falta de espacio; vuelve a verificar antes de cada evento.
 
@@ -187,7 +209,7 @@ npm run test:e2e
 PLAYWRIGHT_CHANNEL=chromium npm run test:e2e
 ```
 
-Los navegadores de Playwright sólo son una dependencia de las pruebas. La operación de la PWA no los requiere. Consulta [el informe de validación](docs/VALIDACION.md) para resultados concretos y límites. Los informes y trazas se guardan en `playwright-report/` y `test-results/`.
+Los navegadores de Playwright sólo son una dependencia de las pruebas. La operación de la PWA no los requiere. Consulta [la validación de modalidades y audio](docs/VALIDACION-MODALIDADES-AUDIO.md) para resultados actuales y límites; [la validación inicial](docs/VALIDACION.md) conserva la evidencia anterior. Los informes y trazas se guardan en `playwright-report/` y `test-results/`.
 
 Las pruebas unitarias inyectan un reloj y no esperan duraciones reales. Cubren transiciones, pausas prolongadas, retrasos, estados finales, CSV, persistencia y mensajes antiguos. Las E2E interactúan con ventanas reales de Chrome; la prueba offline utiliza un perfil temporal persistente, cierra el proceso y vuelve a abrirlo con la red deshabilitada.
 
@@ -197,6 +219,7 @@ Para comprobar también el despliegue en subcarpeta, compila, ejecuta `node scri
 
 | Problema o condición | Acción / alcance |
 | --- | --- |
+| No se escucha el aviso | Pulsa Probar sonido en el panel o Habilitar / probar sonido en la pantalla antes de lanzar. Comprueba volumen, salida HDMI, permisos y el indicador. Una advertencia fallida o incierta no se repite en esa ejecución. |
 | No se abre la pantalla pública | Permite ventanas emergentes del sitio y pulsa Mostrar ventana. Lanzar sigue iniciando el reloj aunque el navegador bloquee la apertura. |
 | No hay selección de monitor | Usa los controles de Windows y el traslado manual. La API es opcional y depende de permisos y navegador. |
 | No funciona pantalla completa | Solicítala desde la propia pantalla pública. Usa maximización manual si el navegador la restringe. |

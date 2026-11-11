@@ -25,7 +25,7 @@ const row = (page, title) => page.getByRole('row').filter({ has: page.getByRole(
 
 test('administra actividades, valida campos y conserva orden y datos al recargar', async ({ page }) => {
   await ready(page);
-  await expect(page.getByRole('radio')).toHaveCount(4);
+  await expect(page.locator('#activities').getByRole('radio')).toHaveCount(4);
   await page.getByRole('button', { name: '＋ Agregar', exact: true }).click();
   await page.getByLabel('Título', { exact: true }).fill('Debate, "público"');
   await page.getByLabel('Duración (MM:SS)').fill('01:99');
@@ -35,17 +35,17 @@ test('administra actividades, valida campos y conserva orden y datos al recargar
   await page.getByRole('button', { name: 'Guardar actividad' }).click();
   await expect(page.getByRole('dialog')).not.toBeVisible();
   await page.getByRole('button', { name: 'Subir: Debate, "público"', exact: true }).click();
-  await expect(page.getByRole('radio').nth(3)).toHaveAccessibleName('Debate, "público"');
+  await expect(page.locator('#activities').getByRole('radio').nth(3)).toHaveAccessibleName('Debate, "público"');
   await page.getByRole('button', { name: 'Editar: Debate, "público"', exact: true }).click();
   await page.getByLabel('Título', { exact: true }).fill('Debate editado');
   await page.getByRole('button', { name: 'Guardar actividad' }).click();
   await expect(page.getByRole('dialog')).not.toBeVisible();
   page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: 'Eliminar: Preguntas', exact: true }).click();
-  await expect(page.getByRole('radio')).toHaveCount(4);
+  await expect(page.locator('#activities').getByRole('radio')).toHaveCount(4);
   await page.reload();
-  await expect(page.getByRole('radio')).toHaveCount(4);
-  await expect(page.getByRole('radio').nth(2)).toHaveAccessibleName('Debate editado');
+  await expect(page.locator('#activities').getByRole('radio')).toHaveCount(4);
+  await expect(page.locator('#activities').getByRole('radio').nth(2)).toHaveAccessibleName('Debate editado');
   await expect(row(page, 'Debate editado')).toContainText('120:00');
 });
 
@@ -130,15 +130,15 @@ test('importa y exporta UTF-8, comas y comillas, conservando datos ante errores 
   await ready(page);
   await page.locator('#csv-file').setInputFiles({ name: 'invalido.csv', mimeType: 'text/csv', buffer: Buffer.from('Buena,01:00\nMala,00:99') });
   await expect(page.locator('#message')).toContainText('Registro 2');
-  await expect(page.getByRole('radio')).toHaveCount(4);
+  await expect(page.locator('#activities').getByRole('radio')).toHaveCount(4);
   const csv = '"Réplica, ""final""",120:00\r\nPreguntas,05:00\r\n';
   page.once('dialog', (dialog) => dialog.dismiss());
   await page.locator('#csv-file').setInputFiles({ name: 'cancelar.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
-  await expect(page.getByRole('radio')).toHaveCount(4);
+  await expect(page.locator('#activities').getByRole('radio')).toHaveCount(4);
   page.once('dialog', (dialog) => dialog.accept());
   await page.locator('#csv-file').setInputFiles({ name: 'valido.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
-  await expect(page.getByRole('radio')).toHaveCount(2);
-  await expect(page.getByRole('radio').first()).toHaveAccessibleName('Réplica, "final"');
+  await expect(page.locator('#activities').getByRole('radio')).toHaveCount(2);
+  await expect(page.locator('#activities').getByRole('radio').first()).toHaveAccessibleName('Réplica, "final"');
   const download = page.waitForEvent('download');
   await page.getByRole('button', { name: '↓ Exportar CSV', exact: true }).click();
   const saved = await download;
@@ -267,11 +267,13 @@ test('abre ambas interfaces sin conexión después de cerrar y reiniciar el nave
     await expect(panel.locator('#offline-status')).toHaveAttribute('data-ready', 'true');
     await expect(panel.getByRole('button', { name: '＋ Agregar', exact: true })).toBeEnabled();
     await add(panel, 'Persistencia sin Internet', '90:00');
+    await panel.locator('input[value="countup"]').check();
     await context.close();
     context = await chromium.launchPersistentContext(directory, { ...options, offline: true });
     panel = context.pages()[0];
     await panel.goto('http://127.0.0.1:4173/index.html');
     await expect(panel.getByRole('radio', { name: 'Persistencia sin Internet', exact: true })).toBeVisible();
+    await expect(panel.locator('input[value="countup"]')).toBeChecked();
     await panel.getByRole('radio', { name: 'Persistencia sin Internet', exact: true }).check();
     const display = await launch(panel);
     await expect(display.locator('#display-title')).toHaveText('Persistencia sin Internet');
@@ -285,7 +287,21 @@ test('abre ambas interfaces sin conexión después de cerrar y reiniciar el nave
     expect((await download).suggestedFilename()).toBe('actividades.csv');
     panel.once('dialog', (dialog) => dialog.accept());
     await panel.locator('#csv-file').setInputFiles({ name: 'offline.csv', mimeType: 'text/csv', buffer: Buffer.from('Importada offline,02:00') });
-    await expect(panel.getByRole('radio')).toHaveCount(1);
+    await expect(panel.locator('#activities').getByRole('radio')).toHaveCount(1);
+    await panel.locator('#stop').click();
+    await add(panel, 'Aviso offline', '01:00');
+    await panel.getByRole('radio', { name: 'Aviso offline', exact: true }).check();
+    await panel.locator('#test-sound').click();
+    await expect(panel.locator('#test-sound')).toBeEnabled();
+    await expect(panel.locator('#audio-status')).toContainText('Sonido habilitado en el panel');
+    await panel.locator('#launch').click();
+    await expect(panel.locator('#warning-status')).toContainText('Advertencia emitida');
+    await expect(panel.locator('#duration-label')).toHaveText('Tiempo límite');
+    await expect(display.locator('#display-title')).toHaveText('Aviso offline');
+    await panel.reload();
+    await expect(panel.locator('#timer-state')).toHaveText('Detenido');
+    await expect(panel.locator('input[value="countup"]')).toBeChecked();
+    await expect(panel.locator('#warning-status')).toContainText('Advertencia emitida');
   } finally { await context?.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -302,6 +318,6 @@ test('funciona en subcarpeta con ambas ventanas y recarga sin red', async ({ pag
   await expect(display.locator('#display-title')).toHaveText('Presentación');
   await page.reload();
   await expect(page.locator('#timer-state')).toHaveText('Detenido');
-  await expect(page.getByRole('radio')).toHaveCount(4);
+  await expect(page.locator('#activities').getByRole('radio')).toHaveCount(4);
   await expect(page.locator('#offline-status')).toHaveAttribute('data-ready', 'true');
 });

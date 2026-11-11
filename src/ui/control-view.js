@@ -1,7 +1,9 @@
 import '../styles/control.css';
-import { TimerEngine } from '../core/timer-engine.js';
+import { TimerEngine, visibleTime } from '../core/timer-engine.js';
+import { WarningAudio, WarningDelivery } from '../audio/warning-audio.js';
 import { formatDuration, parseDuration, validateActivity } from '../core/activity.js';
 import { openDatabase } from '../storage/database.js';
+import { loadMode, saveMode } from '../storage/preferences.js';
 import { importCSV, exportCSV } from '../storage/csv.js';
 import { TimerChannel, HEARTBEAT_MS, STALE_MS, scopeKey } from '../sync/timer-channel.js';
 import { ScreenManager } from '../screens/screen-manager.js';
@@ -25,23 +27,86 @@ async function initialize() {
   let sequence = 0;
   let lastViewerAt = -Infinity;
   const viewers = new Map();
+  const audioViewers = new Map();
+  const handledWarnings = new Set();
+  let warningTarget = null;
+  let warningTimeout;
   const epoch = await db.nextEpoch();
   const engine = new TimerEngine();
+  let mode = 'countdown';
+  try { mode = loadMode(localStorage, scopeKey()); }
+  catch { notify('No se pudo recuperar la preferencia de modalidad. Se usará descendente.', true); }
+  document.querySelector(`input[name="count-mode"][value="${mode}"]`).checked = true;
+  const audio = new WarningAudio({ changed: () => renderAudio() });
+  const delivery = new WarningDelivery({ audio, claim: (id) => db.claimWarning(id), current: () => ({ snapshot: engine.snapshot(), epoch, remainingMs: engine.remaining() }) });
   try { engine.restore(await db.loadSession()); } catch { notify('No se pudo recuperar la última sesión. La configuración de actividades sigue disponible.', true); }
   const screens = new ScreenManager((text) => notify(text, true));
   const channel = new TimerChannel((message) => {
-    if (message.type === 'REQUEST_STATE') { lastViewerAt = performance.now(); viewers.set(message.viewerId, lastViewerAt); publish(false); }
-    if (message.type === 'VIEWER_ALIVE') { lastViewerAt = performance.now(); viewers.set(message.viewerId, lastViewerAt); }
-    if (message.type === 'VIEWER_CLOSED') { viewers.delete(message.viewerId); lastViewerAt = viewers.size ? Math.max(...viewers.values()) : -Infinity; }
+    if (['REQUEST_STATE', 'VIEWER_ALIVE'].includes(message.type)) {
+      lastViewerAt = performance.now(); viewers.set(message.viewerId, lastViewerAt); audioViewers.set(message.viewerId, message.audioReady === true);
+      if (message.type === 'REQUEST_STATE') publish(false);
+      renderAudio();
+    }
+    if (message.type === 'VIEWER_CLOSED') { viewers.delete(message.viewerId); audioViewers.delete(message.viewerId); lastViewerAt = viewers.size ? Math.max(...viewers.values()) : -Infinity; renderAudio(); }
+    if (message.type === 'AUDIO_RESULT' && message.epoch === epoch && message.viewerId === warningTarget?.viewerId && message.id === warningTarget?.id) finishWarning(message.id, message.status);
+  });
+
+  function readyViewer() {
+    return [...viewers].find(([id, at]) => audioViewers.get(id) && performance.now() - at <= STALE_MS)?.[0];
+  }
+  function renderAudio() {
+    const viewer = readyViewer();
+    $('audio-status').dataset.status = viewer || audio.ready ? 'ready' : audio.status;
+    $('audio-status').textContent = viewer ? 'Sonido habilitado en la ventana pública. Verifica el volumen del equipo.' : audio.ready ? 'Sonido habilitado en el panel. Verifica el volumen del equipo.' : audio.status === 'unavailable' ? 'Sonido no disponible. Pulsa Probar sonido para volver a habilitarlo.' : 'Sonido pendiente de habilitar. Pulsa Probar sonido en el panel o en la ventana pública.';
+    const status = engine.session?.warning.status;
+    $('warning-status').textContent = status === 'requested' ? 'Advertencia de un minuto solicitada…' : status === 'played' ? 'Advertencia emitida (salida física sin verificar).' : status === 'unavailable' ? 'Advertencia sin reproducción confirmada; no se reintentará en esta ejecución.' : '';
+  }
+  function finishWarning(id, status) {
+    if (engine.resolveWarning(id, status)) { clearTimeout(warningTimeout); publish(); renderAudio(); }
+  }
+  async function manageWarning(saved) {
+    const snapshot = engine.snapshot();
+    if (snapshot?.warning.status !== 'requested' || handledWarnings.has(snapshot.warning.id)) return;
+    const id = snapshot.warning.id;
+    handledWarnings.add(id);
+    // Persistir requested antes del permiso evita reenvíos tras un cierre abrupto.
+    if (!await (saved || persist())) { finishWarning(id, 'unavailable'); return; }
+    if (engine.session?.warning.id !== id || engine.session.warning.status !== 'requested' || engine.session.state !== 'Ejecutando' || engine.remaining() === 0) return;
+    const viewerId = readyViewer();
+    const sentAt = Date.now();
+    const grant = { id, sessionId: snapshot.sessionId, epoch, sentAt, expiresAt: sentAt + 2500, viewerId };
+    warningTarget = grant;
+    clearTimeout(warningTimeout);
+    warningTimeout = setTimeout(() => finishWarning(id, 'unavailable'), 4500);
+    if (viewerId) channel.send('AUDIO_WARNING', grant);
+    else finishWarning(id, await delivery.deliver(grant));
+    // Sin confirmación no se transfiere el permiso: el destinatario pudo haber sonado.
+  }
+
+  document.querySelectorAll('input[name="count-mode"]').forEach((radio) => radio.addEventListener('change', () => {
+    mode = radio.value;
+    try { saveMode(localStorage, scopeKey(), mode); }
+    catch { notify('No se pudo guardar la modalidad. La selección actual sigue disponible.', true); }
+  }));
+  $('test-sound').addEventListener('click', async () => {
+    $('test-sound').disabled = true;
+    const played = await audio.test();
+    renderAudio();
+    if (!played) $('audio-status').textContent = 'No se pudo completar la prueba. Habilita el sonido con este botón y revisa los permisos del navegador.';
+    $('test-sound').disabled = false;
   });
 
   function persist() {
     const snapshot = engine.snapshot();
-    persistQueue = persistQueue.then(() => db.saveSession(snapshot)).catch(() => notify('La última sesión no se pudo guardar. El temporizador continúa; revisa el almacenamiento antes del siguiente evento.', true));
+    persistQueue = persistQueue.then(() => db.saveSession(snapshot)).then(() => true).catch(() => { notify('La última sesión no se pudo guardar. El temporizador continúa; revisa el almacenamiento antes del siguiente evento.', true); return false; });
+    return persistQueue;
   }
   function publish(save = true) {
     channel.send('SNAPSHOT', { epoch, sequence: ++sequence, sentAt: Date.now(), snapshot: engine.snapshot() });
-    if (save) persist();
+    delivery.sync();
+    const saved = save ? persist() : null;
+    void manageWarning(saved);
+    renderAudio();
   }
   function updateSelection() {
     const selected = activities.find((item) => item.id === selectedId);
@@ -150,7 +215,7 @@ async function initialize() {
     engine.tick();
     const busy = engine.session && ['Ejecutando', 'Pausado'].includes(engine.session.state);
     if (busy && engine.session.activityId !== activity.id && !confirm(`¿Sustituir «${engine.session.title}» por «${activity.title}»?`)) return;
-    engine.launch(activity, { replace: true });
+    engine.launch(activity, { replace: true, mode });
     // Se abre sin esperas asíncronas para conservar la activación del usuario.
     screens.show();
     publish();
@@ -181,7 +246,7 @@ async function initialize() {
   function renderTimer() {
     const snapshot = engine.snapshot();
     const state = snapshot?.state || 'Listo';
-    const time = formatDuration(snapshot?.remainingMs || 0);
+    const time = formatDuration(visibleTime(snapshot));
     const connected = performance.now() - lastViewerAt <= STALE_MS;
     const renderKey = `${snapshot?.sessionId}:${state}:${time}:${connected}:${innerWidth}`;
     if (renderKey === renderedTimer) return;
@@ -193,6 +258,7 @@ async function initialize() {
     $('remaining').classList.toggle('finished', state === 'Finalizado');
     $('timer-state').textContent = state; $('timer-state').dataset.state = state;
     $('original-duration').textContent = snapshot ? formatDuration(snapshot.durationMs) : '—';
+    $('duration-label').textContent = snapshot?.mode === 'countup' ? 'Tiempo límite' : 'Duración original';
     $('pause').textContent = state === 'Pausado' ? 'Continuar' : 'Pausar';
     $('pause').disabled = !['Ejecutando', 'Pausado'].includes(state);
     $('stop').disabled = !['Ejecutando', 'Pausado'].includes(state);
@@ -215,7 +281,7 @@ async function initialize() {
   $('save-status').textContent = '✓ Guardado en este equipo';
   $('workspace-controls').disabled = false;
   renderActivities(); renderTimer(); publish(); animate();
-  return () => { clearInterval(heartbeat); cancelAnimationFrame(frame); channel.send('CONTROLLER_CLOSED'); channel.close(); db.close(); };
+  return () => { clearTimeout(warningTimeout); audio.cancel(); clearInterval(heartbeat); cancelAnimationFrame(frame); channel.send('CONTROLLER_CLOSED'); channel.close(); db.close(); };
 }
 
 // Un único panel puede escribir y controlar el reloj dentro del mismo origen y ruta.

@@ -24,3 +24,16 @@ describe('Protocolo y recuperación de instantáneas', () => {
     channel.close(); expect(channel.channel.closed).toBe(true);
   });
 });
+
+describe('Proyección de modalidad y aviso sin motores independientes', () => {
+  it('recupera modo y advertencia al abrir y rechaza duplicados o generaciones anteriores', () => {
+    const snapshot = { sessionId: 'nueva', mode: 'countup', state: 'Ejecutando', durationMs: 600000, remainingMs: 59000, elapsedMs: 541000, warning: { id: 'nueva', status: 'played' } };
+    expect(receiver.accept(message({ sequence: 5, snapshot }))).toBe(true);
+    now += 1000; expect(receiver.remaining()).toBe(58000); expect(receiver.snapshot).toMatchObject({ mode: 'countup', warning: { status: 'played' } });
+    expect(receiver.accept(message({ sequence: 4, snapshot: { ...snapshot, mode: 'countdown', warning: { status: 'pending' } } }))).toBe(false);
+    expect(receiver.snapshot.mode).toBe('countup');
+  });
+  it('sesiones antiguas se proyectan como countdown', () => {
+    receiver.accept(message()); expect(receiver.snapshot.mode).toBe('countdown');
+  });
+});

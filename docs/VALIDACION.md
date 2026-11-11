@@ -1,4 +1,6 @@
-# Informe técnico de entrega y validación
+# Informe técnico de entrega y validación inicial
+
+Este documento conserva los resultados de la entrega inicial. Para la versión con conteo ascendente, descendente y advertencia sonora, consulta [VALIDACION-MODALIDADES-AUDIO.md](VALIDACION-MODALIDADES-AUDIO.md).
 
 Fecha: 11 de noviembre de 2026. Trabajo realizado directamente en el directorio del proyecto. No se hicieron commits, pushes, publicaciones ni modificaciones remotas.
 

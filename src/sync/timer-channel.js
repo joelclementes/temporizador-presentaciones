@@ -31,7 +31,7 @@ export class SnapshotReceiver {
     this.epoch = message.epoch;
     this.sequence = message.sequence;
     this.receivedAt = this.now();
-    this.snapshot = message.snapshot ? { ...message.snapshot } : null;
+    this.snapshot = message.snapshot ? { ...message.snapshot, mode: message.snapshot.mode === 'countup' ? 'countup' : 'countdown' } : null;
     // Date.now es compatible entre ventanas; sólo compensa tránsito acotado. La proyección usa un reloj local monotónico.
     this.transitMs = Math.min(STALE_MS, Math.max(0, this.wall() - message.sentAt));
     return true;

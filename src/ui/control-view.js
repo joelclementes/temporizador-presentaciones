@@ -1,5 +1,6 @@
 import '../styles/control.css';
 import { TimerEngine, visibleTime } from '../core/timer-engine.js';
+import { STATES, TRANSITIONS } from '../core/timer-state.js';
 import { WarningAudio, WarningDelivery } from '../audio/warning-audio.js';
 import { formatDuration, parseDuration, validateActivity } from '../core/activity.js';
 import { openDatabase } from '../storage/database.js';
@@ -108,9 +109,19 @@ async function initialize() {
     void manageWarning(saved);
     renderAudio();
   }
+  function updateControls() {
+    const state = engine.session?.state || STATES.READY;
+    const transitions = TRANSITIONS[state];
+    const selected = activities.some((item) => item.id === selectedId);
+    $('launch').disabled = state === STATES.PAUSED || (!selected && !engine.session);
+    $('pause').textContent = state === STATES.PAUSED ? 'Continuar' : 'Pausar';
+    $('pause').disabled = !transitions.pause && !transitions.resume;
+    $('stop').disabled = !transitions.stop;
+    $('reset').disabled = !engine.session || !transitions.reset;
+  }
   function updateSelection() {
     const selected = activities.find((item) => item.id === selectedId);
-    $('launch').disabled = !selected && !engine.session;
+    updateControls();
     $('selection-hint').textContent = selected ? `Seleccionada: ${selected.title} · ${formatDuration(selected.durationMs)}` : engine.session ? 'La actividad original sigue disponible en el temporizador activo.' : 'Agrega una actividad para comenzar.';
   }
   function renderActivities() {
@@ -210,6 +221,7 @@ async function initialize() {
     notify('Respaldo CSV descargado. Consérvalo antes de cambiar de equipo o borrar los datos del navegador.');
   });
   $('launch').addEventListener('click', () => {
+    if ($('launch').disabled) return;
     const activity = activities.find((item) => item.id === selectedId) || (engine.session && { id: engine.session.activityId, title: engine.session.title, durationMs: engine.session.durationMs });
     if (!activity) return;
     engine.tick();
@@ -259,10 +271,7 @@ async function initialize() {
     $('timer-state').textContent = state; $('timer-state').dataset.state = state;
     $('original-duration').textContent = snapshot ? formatDuration(snapshot.durationMs) : '—';
     $('duration-label').textContent = snapshot?.mode === 'countup' ? 'Tiempo límite' : 'Duración original';
-    $('pause').textContent = state === 'Pausado' ? 'Continuar' : 'Pausar';
-    $('pause').disabled = !['Ejecutando', 'Pausado'].includes(state);
-    $('stop').disabled = !['Ejecutando', 'Pausado'].includes(state);
-    $('reset').disabled = !snapshot;
+    updateControls();
     $('connection').textContent = connected ? '● Ventana conectada y sincronizada' : 'Sin ventana conectada';
     $('connection').dataset.connected = String(connected);
   }

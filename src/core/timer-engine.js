@@ -43,6 +43,7 @@ export class TimerEngine {
   }
 
   launch(activity, { replace = false, mode = 'countdown' } = {}) {
+    if (this.session?.state === STATES.PAUSED) return false;
     let valid = validateActivity(activity);
     this.tick();
     if (this.session && [STATES.RUNNING, STATES.PAUSED].includes(this.session.state)) {
